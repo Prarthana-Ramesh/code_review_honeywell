@@ -32,17 +32,25 @@ def analyze(
     base_build: Optional[str] = typer.Option(None, help='Base build dir for virtual analysis diff'),
     lru_docs: Optional[str] = typer.Option(None, help='Dir with LRU PDF/DOCX documents'),
     standards_file: Optional[str] = typer.Option(None, help='Path to custom DAL standards YAML/JSON/PDF/DOCX file'),
+    coding_standards_pdf: Optional[str] = typer.Option(
+        None, '--coding-standards-pdf', help='Uploaded coding-standards PDF used directly for validation'
+    ),
     config: str = typer.Option('config.yaml', help='Path to config.yaml'),
     output_format: str = typer.Option('docx', help='Output format: docx or markdown'),
 ) -> None:
     """Run all four DO-178C analyses and generate §11-compliant reports."""
     cfg = load_config(config)
     logger.info(f"RAG Engine — DAL {cfg.dal_level}, output: {cfg.output_dir}")
-    if standards_file:
-        if not Path(standards_file).expanduser().exists():
-            typer.echo(f"Standards file not found: {standards_file}", err=True)
+    selected_standards = coding_standards_pdf or standards_file
+    if coding_standards_pdf and standards_file:
+        typer.echo('Use either --coding-standards-pdf or --standards-file, not both', err=True)
+        raise typer.Exit(1)
+    if selected_standards:
+        selected_path = Path(selected_standards).expanduser()
+        if not selected_path.exists():
+            typer.echo(f"Standards file not found: {selected_standards}", err=True)
             raise typer.Exit(1)
-        cfg.standards_file = standards_file
+        cfg.standards_file = str(selected_path)
 
     reader = CodeReader(cache_dir=cfg.cache_dir)
     current_results = reader.read_directory(codebase)
@@ -157,9 +165,30 @@ def analyze(
 
 
 @app.command()
-def validate_config(config: str = typer.Option('config.yaml')) -> None:
+def validate_config(
+    config: str = typer.Option('config.yaml'),
+    coding_standards_pdf: Optional[str] = typer.Option(
+        None, '--coding-standards-pdf', help='Read and validate an uploaded coding-standards PDF'
+    ),
+) -> None:
     """Validate configuration file."""
     cfg = load_config(config)
+    if coding_standards_pdf:
+        standards_path = Path(coding_standards_pdf).expanduser()
+        if not standards_path.exists():
+            typer.echo(f"Standards PDF not found: {coding_standards_pdf}", err=True)
+            raise typer.Exit(1)
+        if standards_path.suffix.lower() != '.pdf':
+            typer.echo('The --coding-standards-pdf option requires a .pdf file', err=True)
+            raise typer.Exit(1)
+        from rag_engine.knowledge_base.standards_profile import load_raw_standards_profile
+        profile = load_raw_standards_profile(standards_path)
+        typer.echo(
+            'Coding standards PDF OK — '
+            f"A CC limit {profile['dal_specific_standards']['A']['complexity']['cyclomatic_complexity_max']}, "
+            f"B CC limit {profile['dal_specific_standards']['B']['complexity']['cyclomatic_complexity_max']}, "
+            f"C CC limit {profile['dal_specific_standards']['C']['complexity']['cyclomatic_complexity_max']}"
+        )
     typer.echo(f"Config OK — DAL {cfg.dal_level}, output: {cfg.output_dir}")
 
 if __name__ == '__main__':

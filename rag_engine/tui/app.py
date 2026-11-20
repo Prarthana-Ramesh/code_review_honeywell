@@ -180,8 +180,8 @@ class ConfigScreen(Screen):
             yield Input(placeholder="/path/to/base_build", id="base-build")
             yield Static("LRU documents directory (optional)")
             yield Input(placeholder="/path/to/lru_docs", id="lru-docs")
-            yield Static("Standards profile file (optional, YAML/JSON/PDF/DOCX/TXT)")
-            yield Input(placeholder="/path/to/standards.yaml", id="standards-file")
+            yield Static("Coding standards PDF (optional; extracted directly from the uploaded PDF)")
+            yield Input(placeholder="/path/to/coding_standards.pdf", id="standards-file")
             yield Static("Output format")
             yield Select(
                 [("DOCX (Word)", "docx"), ("Markdown", "markdown")],
@@ -211,6 +211,9 @@ class ConfigScreen(Screen):
             if not path.exists():
                 self.notify(f"Standards file not found: {standards_file}", severity="error")
                 return
+            if path.suffix.lower() != ".pdf":
+                self.notify("Upload a .pdf coding standards document", severity="error")
+                return
             try:
                 profile = load_raw_standards_profile(path)
             except Exception as exc:
@@ -231,7 +234,10 @@ class ConfigScreen(Screen):
             output_fmt = self.query_one("#output-format", Select).value
             dal = self.query_one("#dal-level", Select).value
             if standards_file and not Path(standards_file).expanduser().exists():
-                self.notify(f"Standards file not found: {standards_file}", severity="error")
+                self.notify(f"Coding standards PDF not found: {standards_file}", severity="error")
+                return
+            if standards_file and Path(standards_file).suffix.lower() != ".pdf":
+                self.notify("Upload a .pdf coding standards document", severity="error")
                 return
             self.app.push_screen(AnalysisScreen(codebase, base_build, lru_docs, standards_file, str(output_fmt), str(dal)))
 
@@ -417,6 +423,7 @@ class AnalysisScreen(Screen):
             self._log(f"  Score [green]{standards.compliance_score:.1f}%[/green]  "
                       f"Critical [red]{standards.violations_by_severity.get('CRITICAL',0)}[/red]  "
                       f"Major [yellow]{standards.violations_by_severity.get('MAJOR',0)}[/yellow]")
+            self._log(f"  Source: [cyan]{standards.standards_source}[/cyan]")
 
             # Coupling
             coupling = CouplingAnalyzer(current, gb, search, lru_docs).analyze()
@@ -550,13 +557,13 @@ class ResultsScreen(Screen):
 
     def _build_standards_table(self) -> DataTable:
         t = DataTable(id="dt-standards", zebra_stripes=True)
-        t.add_columns("Severity", "Rule", "File", "Line", "Element", "Message")
+        t.add_columns("Severity", "Rule", "File", "Function line", "Violation line", "Element", "Message")
         if self._results.standards:
             for v in self._results.standards.violations:  # type: ignore[union-attr]
                 sev_color = {"CRITICAL": "red", "MAJOR": "yellow", "MEDIUM": "cyan", "MINOR": "white"}.get(v.severity, "white")
                 t.add_row(
                     f"[{sev_color}]{v.severity}[/{sev_color}]",
-                    v.rule, Path(v.file).name, str(v.line), v.element,
+                    v.rule, Path(v.file).name, str(v.function_line or "N/A"), str(v.line), v.element,
                     v.message[:60] + ("…" if len(v.message) > 60 else ""),
                 )
         return t
